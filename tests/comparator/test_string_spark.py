@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from unittest import mock
+
 import pytest
 
 pytest.importorskip("pyspark")
@@ -107,3 +109,19 @@ def test_spark_string_comparator_error_handling(spark_session):
     )  # Invalid type for string comparison
     result_col = comparator.compare(dataframe=df, col1="col1", col2="col2")
     assert result_col is None
+
+
+def test_spark_string_comparator_build_failure_returns_false(spark_session):
+    """If building the comparison expression fails, every row is a mismatch."""
+    comparator = SparkStringComparator()
+    df = spark_session.createDataFrame([("a", "a"), ("b", "b")], ["col1", "col2"])
+    with mock.patch(
+        "datacompy.comparator.string.spark_normalize_string_column",
+        side_effect=Exception("boom"),
+    ):
+        result_col = comparator.compare(dataframe=df, col1="col1", col2="col2")
+    result = df.withColumn("col_match", result_col)
+    assert result.select(["col_match"]).collect() == [
+        ps.Row(col_match=False),
+        ps.Row(col_match=False),
+    ]
