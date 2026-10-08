@@ -13,12 +13,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from decimal import Decimal
+
 import pandas as pd
 import polars as pl
 from datacompy.comparator.numeric import (
     PandasNumericComparator,
     PolarsNumericComparator,
+    decimal_comparator,
 )
+
+
+def test_decimal_comparator_matches_any_decimal_precision():
+    d = decimal_comparator()
+    assert isinstance(d, str) and d == "decimal"
+    assert d == "decimal(10,2)"
+    assert d == "decimal(38,0)"
+    assert d == "decimal"
+    assert "decimal(5,1)" == d  # noqa: SIM300
+    assert "decimal(12,4)" in [d]
+
+
+def test_decimal_comparator_rejects_other_types():
+    d = decimal_comparator()
+    assert d != "double"
+    assert d != "int"
+    assert d != "dec"
+    assert "bigint" not in [d]
 
 
 # tests for PolarsNumericComparator
@@ -76,6 +97,73 @@ def test_polars_numeric_comparator_error_handling():
     assert result is None
 
 
+def test_polars_numeric_comparator_invalid_tolerance_returns_all_false():
+    """A tolerance NumPy cannot use returns all False instead of raising."""
+    comparator = PolarsNumericComparator()
+    col1 = pl.Series([1.0, 2.0, 3.0])
+    col2 = pl.Series([1.0, 2.0, 3.0])
+    assert comparator.compare(col1, col2, rtol=None).to_list() == [
+        False,
+        False,
+        False,
+    ]
+    assert comparator.compare(col1, col2, atol="x").to_list() == [
+        False,
+        False,
+        False,
+    ]
+
+
+def test_polars_numeric_comparator_empty_series():
+    comparator = PolarsNumericComparator()
+    col1 = pl.Series([], dtype=pl.Float64)
+    col2 = pl.Series([], dtype=pl.Float64)
+    result = comparator.compare(col1, col2)
+    assert result.to_list() == []
+    assert result.dtype == pl.Boolean
+
+
+def test_polars_numeric_comparator_tolerance_boundary_inclusive():
+    comparator = PolarsNumericComparator()
+    col1 = pl.Series([1.0, 1.0])
+    col2 = pl.Series([1.5, 1.5000001])
+    assert comparator.compare(col1, col2, rtol=0, atol=0.5).to_list() == [
+        True,
+        False,
+    ]
+
+
+def test_polars_numeric_comparator_relative_tolerance_uses_second_column():
+    comparator = PolarsNumericComparator()
+    col1 = pl.Series([10.0, 12.0])
+    col2 = pl.Series([12.0, 10.0])
+    assert comparator.compare(col1, col2, rtol=0.18, atol=0).to_list() == [
+        True,
+        False,
+    ]
+
+
+def test_polars_numeric_comparator_nan_vs_number():
+    comparator = PolarsNumericComparator()
+    col1 = pl.Series([float("nan"), 1.0])
+    col2 = pl.Series([1.0, float("nan")])
+    assert comparator.compare(col1, col2).to_list() == [False, False]
+
+
+def test_polars_numeric_comparator_null_handling():
+    comparator = PolarsNumericComparator()
+    col1 = pl.Series([1.0, None, None])
+    col2 = pl.Series([1.0, None, 2.0])
+    assert comparator.compare(col1, col2).to_list() == [True, True, False]
+
+
+def test_polars_numeric_comparator_decimal():
+    comparator = PolarsNumericComparator()
+    col1 = pl.Series([Decimal("1.10"), Decimal("2.20")])
+    col2 = pl.Series([Decimal("1.10"), Decimal("2.25")])
+    assert comparator.compare(col1, col2).to_list() == [True, False]
+
+
 # tests for PandasNumericComparator
 def test_pandas_numeric_comparator_exact_match():
     comparator = PandasNumericComparator()
@@ -129,3 +217,79 @@ def test_pandas_numeric_comparator_error_handling():
     col2 = pd.Series([1.0, 2.5, 3.0, 4.0])
     result = comparator.compare(col1, col2)
     assert result is None
+
+
+def test_pandas_numeric_comparator_invalid_tolerance_returns_all_false():
+    comparator = PandasNumericComparator()
+    col1 = pd.Series([1.0, 2.0, 3.0])
+    col2 = pd.Series([1.0, 2.0, 3.0])
+    assert comparator.compare(col1, col2, rtol=None).tolist() == [
+        False,
+        False,
+        False,
+    ]
+    assert comparator.compare(col1, col2, atol="x").tolist() == [
+        False,
+        False,
+        False,
+    ]
+
+
+def test_pandas_numeric_comparator_uncastable_integers_return_all_false():
+    """An uncastable integer marks every row mismatched and preserves the index."""
+    comparator = PandasNumericComparator()
+    col1 = pd.Series([10**400, 1], dtype=object, index=[5, 6])
+    col2 = pd.Series([1, 1], dtype=object, index=[5, 6])
+    result = comparator.compare(col1, col2)
+    assert result.tolist() == [False, False]
+    assert result.index.tolist() == [5, 6]
+
+
+def test_pandas_numeric_comparator_empty_series():
+    comparator = PandasNumericComparator()
+    col1 = pd.Series([], dtype=float)
+    col2 = pd.Series([], dtype=float)
+    result = comparator.compare(col1, col2)
+    assert result.tolist() == []
+    assert result.dtype == bool
+
+
+def test_pandas_numeric_comparator_tolerance_boundary_inclusive():
+    comparator = PandasNumericComparator()
+    col1 = pd.Series([1.0, 1.0])
+    col2 = pd.Series([1.5, 1.5000001])
+    assert comparator.compare(col1, col2, rtol=0, atol=0.5).tolist() == [
+        True,
+        False,
+    ]
+
+
+def test_pandas_numeric_comparator_relative_tolerance_uses_second_column():
+    comparator = PandasNumericComparator()
+    col1 = pd.Series([10.0, 12.0])
+    col2 = pd.Series([12.0, 10.0])
+    assert comparator.compare(col1, col2, rtol=0.18, atol=0).tolist() == [
+        True,
+        False,
+    ]
+
+
+def test_pandas_numeric_comparator_nan_vs_number():
+    comparator = PandasNumericComparator()
+    col1 = pd.Series([float("nan"), 1.0])
+    col2 = pd.Series([1.0, float("nan")])
+    assert comparator.compare(col1, col2).tolist() == [False, False]
+
+
+def test_pandas_numeric_comparator_nullable_integers():
+    comparator = PandasNumericComparator()
+    col1 = pd.Series([1, None, None, 3], dtype="Int64")
+    col2 = pd.Series([1, None, 2, 4], dtype="Int64")
+    assert comparator.compare(col1, col2).tolist() == [True, True, False, False]
+
+
+def test_pandas_numeric_comparator_decimal_vs_float():
+    comparator = PandasNumericComparator()
+    col1 = pd.Series([Decimal("1.10"), Decimal("2.20")])
+    col2 = pd.Series([1.1, 2.25])
+    assert comparator.compare(col1, col2).tolist() == [True, False]
