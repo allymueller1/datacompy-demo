@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from decimal import Decimal
+
 import pytest
 
 pytest.importorskip("pyspark")
@@ -138,3 +140,106 @@ def test_spark_numeric_comparator_integer_isnan_safe(spark_session):
     assert result[0][0] is True
     assert result[1][0] is False
     assert result[2][0] is False
+
+
+def test_spark_numeric_comparator_invalid_tolerance_returns_all_false(spark_session):
+    comparator = SparkNumericComparator()
+    df = spark_session.createDataFrame([(1.0, 1.0), (2.0, 2.5)], ["col1", "col2"])
+    for tolerance in ("rtol", "atol"):
+        kwargs = {tolerance: object()}
+        result_col = comparator.compare(
+            dataframe=df, col1="col1", col2="col2", **kwargs
+        )
+        result = df.withColumn("col_match", result_col).select("col_match").collect()
+        assert result == [ps.Row(col_match=False), ps.Row(col_match=False)]
+
+
+def test_spark_numeric_comparator_decimal_vs_double(spark_session):
+    from pyspark.sql.types import DecimalType, DoubleType, StructField, StructType
+
+    schema = StructType(
+        [
+            StructField("col1", DecimalType(10, 2)),
+            StructField("col2", DoubleType()),
+        ]
+    )
+    df = spark_session.createDataFrame(
+        [(Decimal("1.10"), 1.1), (Decimal("2.20"), 2.25)], schema
+    )
+    comparator = SparkNumericComparator()
+    result_col = comparator.compare(dataframe=df, col1="col1", col2="col2")
+    result = df.withColumn("col_match", result_col).select("col_match").collect()
+    assert result == [ps.Row(col_match=True), ps.Row(col_match=False)]
+
+
+def test_spark_numeric_comparator_null_handling(spark_session):
+    from pyspark.sql.types import DoubleType, StructField, StructType
+
+    schema = StructType(
+        [
+            StructField("col1", DoubleType()),
+            StructField("col2", DoubleType()),
+        ]
+    )
+    df = spark_session.createDataFrame(
+        [(None, None), (1.0, None), (None, 1.0), (float("nan"), None)], schema
+    )
+    comparator = SparkNumericComparator()
+    result_col = comparator.compare(dataframe=df, col1="col1", col2="col2")
+    result = df.withColumn("col_match", result_col).select("col_match").collect()
+    assert result == [
+        ps.Row(col_match=True),
+        ps.Row(col_match=False),
+        ps.Row(col_match=False),
+        ps.Row(col_match=False),
+    ]
+
+
+def test_spark_numeric_comparator_tolerance_boundary_inclusive(spark_session):
+    comparator = SparkNumericComparator()
+    df = spark_session.createDataFrame([(1.0, 1.5), (1.0, 1.5000001)], ["col1", "col2"])
+    result_col = comparator.compare(
+        dataframe=df, col1="col1", col2="col2", rtol=0, atol=0.5
+    )
+    result = df.withColumn("col_match", result_col).select("col_match").collect()
+    assert result == [ps.Row(col_match=True), ps.Row(col_match=False)]
+
+
+def test_spark_numeric_comparator_relative_tolerance_uses_second_column(spark_session):
+    comparator = SparkNumericComparator()
+    df = spark_session.createDataFrame([(10.0, 12.0), (12.0, 10.0)], ["col1", "col2"])
+    result_col = comparator.compare(
+        dataframe=df, col1="col1", col2="col2", rtol=0.18, atol=0
+    )
+    result = df.withColumn("col_match", result_col).select("col_match").collect()
+    assert result == [ps.Row(col_match=True), ps.Row(col_match=False)]
+
+
+def test_spark_numeric_comparator_empty_dataframe(spark_session):
+    from pyspark.sql.types import DoubleType, StructField, StructType
+
+    schema = StructType(
+        [
+            StructField("col1", DoubleType()),
+            StructField("col2", DoubleType()),
+        ]
+    )
+    df = spark_session.createDataFrame([], schema)
+    comparator = SparkNumericComparator()
+    result_col = comparator.compare(dataframe=df, col1="col1", col2="col2")
+    result = df.withColumn("col_match", result_col).select("col_match").collect()
+    assert result == []
+
+
+def test_spark_numeric_comparator_numeric_vs_string_returns_none(spark_session):
+    from pyspark.sql.types import DoubleType, StringType, StructField, StructType
+
+    schema = StructType(
+        [
+            StructField("col1", DoubleType()),
+            StructField("col2", StringType()),
+        ]
+    )
+    df = spark_session.createDataFrame([(1.0, "1.0")], schema)
+    comparator = SparkNumericComparator()
+    assert comparator.compare(dataframe=df, col1="col1", col2="col2") is None
