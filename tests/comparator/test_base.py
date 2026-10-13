@@ -26,7 +26,7 @@ class ValidComparator(BaseComparator):
 
 def test_base_comparator_abstract_method():
     """Test that BaseComparator cannot be instantiated directly."""
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="compare"):
         BaseComparator()
 
 
@@ -41,3 +41,15 @@ def test_base_comparator_compare_not_implemented():
 
     comparator = ValidComparator()
     assert comparator.compare() is True
+
+
+def test_base_comparator_super_compare_raises_not_implemented():
+    """Test that delegating to the base compare raises NotImplementedError."""
+
+    class DelegatingComparator(BaseComparator):
+        def compare(self, col1, col2, **kwargs):
+            return super().compare(col1, col2, **kwargs)
+
+    comparator = DelegatingComparator()
+    with pytest.raises(NotImplementedError):
+        comparator.compare([1, 2], [1, 2], abs_tol=0.1)
